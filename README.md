@@ -15,7 +15,6 @@
 ## 快速开始
 
 ```bash
-go build -o aliyun-cdn-guard ./cmd/aliyun-cdn-guard
 cp config.example.yml config.yml  # 然后进行配置
 cp .env.example .env              # 然后填写密钥
 ./aliyun-cdn-guard --check-config
@@ -27,7 +26,6 @@ cp .env.example .env              # 然后填写密钥
 ## Docker
 
 ```bash
-docker build -t aliyun-cdn-guard .
 docker run -d \
   --name aliyun-cdn-guard \
   --restart unless-stopped \
@@ -35,16 +33,5 @@ docker run -d \
   -e ALIBABA_CLOUD_ACCESS_KEY_SECRET=your_access_key_secret \
   -v "$PWD/config.yml:/app/config.yml:ro" \
   -v "$PWD/data:/app/data" \
-  aliyun-cdn-guard
+  chriskimzht/aliyun-cdn-guard:1
 ```
-
-## 性能参考
-
-当前实现为每个有效请求单独提交一次 SQLite 事务，本机微基准约为 450 QPS，热点流量持续累积时会进一步下降。
-
-| 持续输入速率 | 预期状态 |
-| --- | --- |
-| 低于 100 QPS | 通常较稳妥 |
-| 100–250 QPS | 建议的生产运行区间 |
-| 250–400 QPS | 容易受到热点流量和磁盘性能影响 |
-| 持续超过 400 QPS | 可能产生 SLS 消费积压 |
