@@ -16,7 +16,7 @@ import (
 	"aliyun-cdn-guard/internal/config"
 )
 
-const version = "1.1.0-go"
+var version = "dev"
 
 func main() {
 	configureLogging("INFO")
