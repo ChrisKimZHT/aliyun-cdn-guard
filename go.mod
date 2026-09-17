@@ -8,6 +8,7 @@ require (
 	github.com/alibabacloud-go/tea v1.3.13
 	github.com/aliyun/aliyun-log-go-sdk v0.1.131
 	github.com/aliyun/credentials-go v1.4.13
+	github.com/go-kit/kit v0.10.0
 	github.com/joho/godotenv v1.5.1
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.59.0
@@ -20,7 +21,6 @@ require (
 	github.com/cenkalti/backoff v2.2.1+incompatible // indirect
 	github.com/clbanning/mxj/v2 v2.7.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/go-kit/kit v0.10.0 // indirect
 	github.com/go-logfmt/logfmt v0.5.1 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.2 // indirect

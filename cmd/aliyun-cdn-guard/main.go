@@ -19,17 +19,18 @@ import (
 const version = "1.1.0-go"
 
 func main() {
+	configureLogging("INFO")
 	configPath := flag.String("config", "config.yml", "YAML configuration path")
 	envFile := flag.String("env-file", ".env", "dotenv file for local development")
 	checkConfig := flag.Bool("check-config", false, "validate configuration and exit")
 	flag.Parse()
 	if err := godotenv.Load(*envFile); err != nil && !os.IsNotExist(err) {
-		fmt.Fprintf(os.Stderr, "cannot load env file: %v\n", err)
+		slog.Error("cannot load env file", "error", err)
 		os.Exit(2)
 	}
 	cfg, err := config.Load(*configPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
+		slog.Error("configuration error", "error", err)
 		os.Exit(2)
 	}
 	configureLogging(cfg.LogLevel)
@@ -58,5 +59,5 @@ func configureLogging(level string) {
 	default:
 		l = slog.LevelInfo
 	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: l})))
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: l})))
 }

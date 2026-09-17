@@ -51,7 +51,9 @@ func New(cfg *config.Config, cred credentials.Credential, d *detector.Detector, 
 			return nil, err
 		}
 	}
-	option := consumer.LogHubConfig{Endpoint: cfg.SLS.Endpoint, CredentialsProvider: credentialAdapter{cred}, Project: cfg.SLS.Project, Logstore: cfg.SLS.Logstore, ConsumerGroupName: cfg.SLS.ConsumerGroup, ConsumerName: consumerName, CursorPosition: cursor, CursorStartTime: start, DataFetchIntervalInMs: int64(cfg.SLS.FetchIntervalSeconds) * 1000, Region: cfg.SLS.Region}
+	logger := sdkLogger{logger: slog.Default()}
+	sls.Logger = logger
+	option := consumer.LogHubConfig{Endpoint: cfg.SLS.Endpoint, CredentialsProvider: credentialAdapter{cred}, Project: cfg.SLS.Project, Logstore: cfg.SLS.Logstore, ConsumerGroupName: cfg.SLS.ConsumerGroup, ConsumerName: consumerName, CursorPosition: cursor, CursorStartTime: start, DataFetchIntervalInMs: int64(cfg.SLS.FetchIntervalSeconds) * 1000, Region: cfg.SLS.Region, Logger: logger}
 	process := func(_ int, groups *sls.LogGroupList, tracker consumer.CheckPointTracker) (string, error) {
 		for _, group := range groups.GetLogGroups() {
 			for _, item := range group.GetLogs() {
