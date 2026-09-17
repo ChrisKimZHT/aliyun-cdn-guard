@@ -1,19 +1,23 @@
-FROM python:3.14-slim
+FROM golang:1.27.1-alpine AS build
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd ./cmd
+COPY internal ./internal
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/aliyun-cdn-guard ./cmd/aliyun-cdn-guard
 
-WORKDIR /app
-COPY pyproject.toml README.md ./
-COPY src ./src
-RUN pip install --no-cache-dir .
+FROM alpine:3.22
 
-RUN useradd --system --uid 10001 guard \
+RUN apk add --no-cache ca-certificates \
+    && adduser -S -D -H -u 10001 guard \
     && mkdir -p /app/data \
     && chown -R guard:guard /app
-USER guard
 
+WORKDIR /app
+COPY --from=build /out/aliyun-cdn-guard /usr/local/bin/aliyun-cdn-guard
+
+USER guard
 VOLUME ["/app/data"]
 ENTRYPOINT ["aliyun-cdn-guard"]
 CMD ["--config", "/app/config.yml"]
-

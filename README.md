@@ -1,4 +1,4 @@
-# Aliyun CDN Guard
+# aliyun-cdn-guard
 
 从阿里云 SLS 实时消费 CDN 访问日志，识别高频恶意请求来源并封禁，并自动维护对应域名的 CDN IP 黑名单。
 
@@ -14,14 +14,12 @@
 
 ## 快速开始
 
-要求 Python 3.14+。
-
 ```bash
-pip install .
-cp config.example.yml config.yml
-cp .env.example .env
-aliyun-cdn-guard --check-config
-aliyun-cdn-guard
+go build -o aliyun-cdn-guard ./cmd/aliyun-cdn-guard
+cp config.example.yml config.yml  # 然后进行配置
+cp .env.example .env              # 然后填写密钥
+./aliyun-cdn-guard --check-config
+./aliyun-cdn-guard
 ```
 
 主要配置见 [`config.example.yml`](config.example.yml)，生产环境建议使用 ECS RAM 角色，需授权 log 和 CDN 服务的权限。
@@ -33,6 +31,8 @@ docker build -t aliyun-cdn-guard .
 docker run -d \
   --name aliyun-cdn-guard \
   --restart unless-stopped \
+  -e ALIBABA_CLOUD_ACCESS_KEY_ID=your_access_key_id \
+  -e ALIBABA_CLOUD_ACCESS_KEY_SECRET=your_access_key_secret \
   -v "$PWD/config.yml:/app/config.yml:ro" \
   -v "$PWD/data:/app/data" \
   aliyun-cdn-guard

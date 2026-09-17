@@ -1,14 +1,10 @@
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.pytest-tmp/
 .env
 data/
 *.db
 *.db-shm
 *.db-wal
-dist/
-build/
-*.egg-info/
 config.yml
 .vscode
+.gocache/
+/aliyun-cdn-guard
+/aliyun-cdn-guard.exe

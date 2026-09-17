@@ -1,10 +1,9 @@
 .git
 .env
-.pytest_cache
-__pycache__
-*.pyc
 *.db*
 data
-tests
 config.yml
 .vscode
+.gocache
+/aliyun-cdn-guard
+/aliyun-cdn-guard.exe
