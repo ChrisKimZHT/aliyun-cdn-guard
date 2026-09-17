@@ -11,7 +11,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.version=
 FROM alpine:3.22
 
 RUN apk add --no-cache ca-certificates \
-    && adduser -S -D -H -u 10001 guard \
+    && addgroup -S -g 10001 guard \
+    && adduser -S -D -H -u 10001 -G guard guard \
     && mkdir -p /app/data \
     && chown -R guard:guard /app
 
