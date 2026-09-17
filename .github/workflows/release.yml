@@ -66,12 +66,13 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           mkdir -p dist/package
+          cp config.example.yml .env.example README.md dist/package/
           if [ "${GOOS}" = "windows" ]; then
             go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o dist/package/aliyun-cdn-guard.exe ./cmd/aliyun-cdn-guard
-            (cd dist/package && zip "../aliyun-cdn-guard_${VERSION}_${GOOS}_${GOARCH}.zip" aliyun-cdn-guard.exe)
+            (cd dist/package && zip "../aliyun-cdn-guard_${VERSION}_${GOOS}_${GOARCH}.zip" aliyun-cdn-guard.exe config.example.yml .env.example README.md)
           else
             go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o dist/package/aliyun-cdn-guard ./cmd/aliyun-cdn-guard
-            tar -C dist/package -czf "dist/aliyun-cdn-guard_${VERSION}_${GOOS}_${GOARCH}.tar.gz" aliyun-cdn-guard
+            tar -C dist/package -czf "dist/aliyun-cdn-guard_${VERSION}_${GOOS}_${GOARCH}.tar.gz" aliyun-cdn-guard config.example.yml .env.example README.md
           fi
 
       - name: Upload archive
