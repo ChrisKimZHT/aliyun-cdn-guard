@@ -23,7 +23,12 @@ func main() {
 	configPath := flag.String("config", "config.yml", "YAML configuration path")
 	envFile := flag.String("env-file", ".env", "dotenv file for local development")
 	checkConfig := flag.Bool("check-config", false, "validate configuration and exit")
+	showVersion := flag.Bool("version", false, "print version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 	if err := godotenv.Load(*envFile); err != nil && !os.IsNotExist(err) {
 		slog.Error("cannot load env file", "error", err)
 		os.Exit(2)
