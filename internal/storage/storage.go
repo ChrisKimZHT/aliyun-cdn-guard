@@ -7,14 +7,25 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"aliyun-cdn-guard/internal/model"
 	_ "modernc.org/sqlite"
 )
 
-type Storage struct{ db *sql.DB }
+type Storage struct {
+	db                                   *sql.DB
+	insertEvent, lookupBlock, writeBlock *sql.Stmt
+	counts                               [4]*sql.Stmt
+}
+
+type recordStatements struct{ insertEvent, lookupBlock, count, writeBlock *sql.Stmt }
+
+const insertEventSQL = "INSERT OR IGNORE INTO events VALUES (?, ?, ?, ?, ?, ?)"
+const lookupBlockSQL = "SELECT first_blocked_at, blocked_until, offense_count FROM blocks WHERE domain = ? AND client_ip = ?"
+const writeBlockSQL = `INSERT INTO blocks(domain, client_ip, first_blocked_at, blocked_until, offense_count, cdn_owned)
+ VALUES (?, ?, ?, ?, ?, NULL)
+ ON CONFLICT(domain, client_ip) DO UPDATE SET blocked_until=excluded.blocked_until, offense_count=excluded.offense_count, cdn_owned=NULL`
 
 func Open(path string) (*Storage, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -42,6 +53,9 @@ func (s *Storage) initialize() error {
 			event_id TEXT PRIMARY KEY, occurred_at INTEGER NOT NULL, domain TEXT NOT NULL,
 			client_ip TEXT NOT NULL, ua_key TEXT NOT NULL, uri_key TEXT NOT NULL)`,
 		`CREATE INDEX IF NOT EXISTS idx_events_window ON events(domain, client_ip, ua_key, uri_key, occurred_at)`,
+		// The original index cannot seek by time when UA or URI is disabled.
+		`CREATE INDEX IF NOT EXISTS idx_events_ip_time ON events(domain, client_ip, occurred_at, ua_key, uri_key)`,
+		`CREATE INDEX IF NOT EXISTS idx_events_time ON events(occurred_at)`,
 		`CREATE TABLE IF NOT EXISTS blocks (
 			domain TEXT NOT NULL, client_ip TEXT NOT NULL, first_blocked_at INTEGER NOT NULL,
 			blocked_until INTEGER NOT NULL, offense_count INTEGER NOT NULL, cdn_owned INTEGER,
@@ -54,6 +68,33 @@ func (s *Storage) initialize() error {
 			return fmt.Errorf("initialize storage: %w", err)
 		}
 	}
+	// Compile hot statements once rather than parsing SQL for every log.
+	for _, item := range []struct {
+		target **sql.Stmt
+		query  string
+	}{
+		{&s.insertEvent, insertEventSQL}, {&s.lookupBlock, lookupBlockSQL}, {&s.writeBlock, writeBlockSQL},
+	} {
+		stmt, err := s.db.Prepare(item.query)
+		if err != nil {
+			return fmt.Errorf("prepare storage: %w", err)
+		}
+		*item.target = stmt
+	}
+	for mask := range s.counts {
+		query := "SELECT COUNT(*) FROM events WHERE domain = ? AND client_ip = ? AND occurred_at >= ? AND occurred_at <= ?"
+		if mask&1 != 0 {
+			query += " AND ua_key = ?"
+		}
+		if mask&2 != 0 {
+			query += " AND uri_key = ?"
+		}
+		stmt, err := s.db.Prepare(query)
+		if err != nil {
+			return fmt.Errorf("prepare window query: %w", err)
+		}
+		s.counts[mask] = stmt
+	}
 	return nil
 }
 
@@ -64,16 +105,61 @@ type DetectionOptions struct {
 	Now                                                 int64
 }
 
+// Record is an event with its normalized detection dimensions.
+type Record struct {
+	Event         model.AccessEvent
+	UAKey, URIKey string
+}
+
 func (s *Storage) RecordAndMaybeBlock(ctx context.Context, event model.AccessEvent, uaKey, uriKey string, opts DetectionOptions) (*model.BlockDecision, error) {
-	if opts.Now == 0 {
-		opts.Now = time.Now().Unix()
+	decisions, err := s.RecordBatch(ctx, []Record{{event, uaKey, uriKey}}, opts)
+	if err != nil {
+		return nil, err
+	}
+	return decisions[0], nil
+}
+
+// RecordBatch commits all events and decisions atomically, in input order.
+// Decisions are aligned with records and are returned only after a successful commit.
+func (s *Storage) RecordBatch(ctx context.Context, records []Record, opts DetectionOptions) ([]*model.BlockDecision, error) {
+	decisions := make([]*model.BlockDecision, len(records))
+	if len(records) == 0 {
+		return decisions, nil
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
-	result, err := tx.ExecContext(ctx, "INSERT OR IGNORE INTO events VALUES (?, ?, ?, ?, ?, ?)", event.EventID, event.Timestamp, event.Domain, event.ClientIP, uaKey, uriKey)
+	mask := 0
+	if opts.UseUA {
+		mask |= 1
+	}
+	if opts.UseURI {
+		mask |= 2
+	}
+	statements := recordStatements{
+		tx.StmtContext(ctx, s.insertEvent), tx.StmtContext(ctx, s.lookupBlock),
+		tx.StmtContext(ctx, s.counts[mask]), tx.StmtContext(ctx, s.writeBlock),
+	}
+	for i, record := range records {
+		current := opts
+		if current.Now == 0 {
+			current.Now = time.Now().Unix()
+		}
+		decisions[i], err = recordInTx(ctx, statements, record.Event, record.UAKey, record.URIKey, current)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return decisions, nil
+}
+
+func recordInTx(ctx context.Context, statements recordStatements, event model.AccessEvent, uaKey, uriKey string, opts DetectionOptions) (*model.BlockDecision, error) {
+	result, err := statements.insertEvent.ExecContext(ctx, event.EventID, event.Timestamp, event.Domain, event.ClientIP, uaKey, uriKey)
 	if err != nil {
 		return nil, err
 	}
@@ -82,38 +168,34 @@ func (s *Storage) RecordAndMaybeBlock(ctx context.Context, event model.AccessEve
 		return nil, err
 	}
 	if inserted == 0 {
-		if err := tx.Commit(); err != nil {
-			return nil, err
-		}
 		return nil, nil
-	}
-
-	clauses := []string{"domain = ?", "client_ip = ?", "occurred_at >= ?", "occurred_at <= ?"}
-	args := []any{event.Domain, event.ClientIP, event.Timestamp - int64(opts.WindowSeconds) + 1, event.Timestamp}
-	if opts.UseUA {
-		clauses = append(clauses, "ua_key = ?")
-		args = append(args, uaKey)
-	}
-	if opts.UseURI {
-		clauses = append(clauses, "uri_key = ?")
-		args = append(args, uriKey)
-	}
-	var count int
-	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM events WHERE "+strings.Join(clauses, " AND "), args...).Scan(&count); err != nil {
-		return nil, err
 	}
 
 	var firstBlocked, blockedUntil int64
 	var offense int
-	err = tx.QueryRowContext(ctx, "SELECT first_blocked_at, blocked_until, offense_count FROM blocks WHERE domain = ? AND client_ip = ?", event.Domain, event.ClientIP).Scan(&firstBlocked, &blockedUntil, &offense)
+	err = statements.lookupBlock.QueryRowContext(ctx, event.Domain, event.ClientIP).Scan(&firstBlocked, &blockedUntil, &offense)
 	hasExisting := err == nil
 	if err != nil && err != sql.ErrNoRows {
 		return nil, err
 	}
-	if count < opts.Threshold || (hasExisting && blockedUntil > opts.Now) {
-		if err := tx.Commit(); err != nil {
-			return nil, err
-		}
+	// Still persist and deduplicate blocked traffic: it must count after expiry.
+	// Only the redundant window scan can be skipped while a block is active.
+	if hasExisting && blockedUntil > opts.Now {
+		return nil, nil
+	}
+	args := []any{event.Domain, event.ClientIP, event.Timestamp - int64(opts.WindowSeconds) + 1, event.Timestamp}
+	if opts.UseUA {
+		args = append(args, uaKey)
+	}
+	if opts.UseURI {
+		args = append(args, uriKey)
+	}
+	var count int
+	if err := statements.count.QueryRowContext(ctx, args...).Scan(&count); err != nil {
+		return nil, err
+	}
+
+	if count < opts.Threshold {
 		return nil, nil
 	}
 	if hasExisting {
@@ -128,14 +210,9 @@ func (s *Storage) RecordAndMaybeBlock(ctx context.Context, event model.AccessEve
 		duration = int(durationFloat)
 	}
 	blockedUntil = opts.Now + int64(duration)
-	_, err = tx.ExecContext(ctx, `INSERT INTO blocks(domain, client_ip, first_blocked_at, blocked_until, offense_count, cdn_owned)
-		VALUES (?, ?, ?, ?, ?, NULL)
-		ON CONFLICT(domain, client_ip) DO UPDATE SET blocked_until=excluded.blocked_until, offense_count=excluded.offense_count, cdn_owned=NULL`,
+	_, err = statements.writeBlock.ExecContext(ctx,
 		event.Domain, event.ClientIP, firstBlocked, blockedUntil, offense)
 	if err != nil {
-		return nil, err
-	}
-	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
 	return &model.BlockDecision{Domain: event.Domain, ClientIP: event.ClientIP, Count: count, BlockedUntil: blockedUntil, OffenseCount: offense, BlockedAt: opts.Now}, nil

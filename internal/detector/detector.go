@@ -59,38 +59,77 @@ func (d *Detector) Snapshot(reset bool) map[string][2]int64 {
 	return out
 }
 
+// BatchSize bounds transaction size and the delay before decisions become visible.
+const BatchSize = 256
+
 func (d *Detector) Process(ctx context.Context, event model.AccessEvent, now int64) (*model.BlockDecision, error) {
+	decisions, err := d.ProcessBatch(ctx, []model.AccessEvent{event}, now)
+	if err != nil || len(decisions) == 0 {
+		return nil, err
+	}
+	return decisions[0], nil
+}
+
+// ProcessBatch filters events, commits in bounded chunks, then publishes audit records.
+func (d *Detector) ProcessBatch(ctx context.Context, events []model.AccessEvent, now int64) ([]*model.BlockDecision, error) {
+	var out []*model.BlockDecision
+	for start := 0; start < len(events); start += BatchSize {
+		end := min(start+BatchSize, len(events))
+		records := make([]storage.Record, 0, end-start)
+		for _, event := range events[start:end] {
+			if record, ok := d.prepare(event); ok {
+				records = append(records, record)
+			}
+		}
+		decisions, err := d.storage.RecordBatch(ctx, records, storage.DetectionOptions{Threshold: d.cfg.Detection.Threshold, WindowSeconds: d.cfg.Detection.WindowSeconds, BaseDuration: d.cfg.Penalty.BaseDurationSeconds, Multiplier: d.cfg.Penalty.Multiplier, MaxDuration: d.cfg.Penalty.MaxDurationSeconds, UseUA: d.cfg.Detection.UA.Enabled, UseURI: d.cfg.Detection.URI.Enabled, Now: now})
+		if err != nil {
+			return nil, err
+		}
+		for i, decision := range decisions {
+			if decision != nil {
+				d.publish(records[i].Event, decision)
+				out = append(out, decision)
+			}
+		}
+	}
+	return out, nil
+}
+
+func (d *Detector) prepare(event model.AccessEvent) (storage.Record, bool) {
 	if _, ok := d.domains[event.Domain]; !ok {
 		slog.Debug("ignoring log", "reason", "unmanaged domain", "domain", event.Domain)
-		return nil, nil
+		return storage.Record{}, false
 	}
 	addr, err := netip.ParseAddr(event.ClientIP)
 	if err != nil {
 		slog.Warn("ignoring log", "reason", "invalid client_ip", "client_ip", event.ClientIP)
-		return nil, nil
+		return storage.Record{}, false
 	}
 	if addr.Is6() {
 		event.ClientIP = addr.StringExpanded()
 	} else {
 		event.ClientIP = addr.String()
 	}
-	uriKey := normalization.URI(event.URI, event.URIParam, d.cfg.Detection.URI)
 	if _, ok := d.cfg.Whitelist.Domains[event.Domain]; ok {
-		return nil, nil
+		return storage.Record{}, false
 	}
 	for _, network := range d.cfg.Whitelist.IPNetworks {
 		if network.Contains(addr) {
-			return nil, nil
+			return storage.Record{}, false
 		}
 	}
 	for _, r := range d.cfg.Whitelist.UARegexes {
-		if r.FindStringIndex(event.UserAgent) != nil {
-			return nil, nil
+		if r.MatchString(event.UserAgent) {
+			return storage.Record{}, false
 		}
 	}
+	uriKey := ""
+	if d.cfg.Detection.URI.Enabled || len(d.cfg.Whitelist.URIRegexes) > 0 {
+		uriKey = normalization.URI(event.URI, event.URIParam, d.cfg.Detection.URI)
+	}
 	for _, r := range d.cfg.Whitelist.URIRegexes {
-		if r.FindStringIndex(uriKey) != nil {
-			return nil, nil
+		if r.MatchString(uriKey) {
+			return storage.Record{}, false
 		}
 	}
 	d.mu.Lock()
@@ -105,17 +144,16 @@ func (d *Detector) Process(ctx context.Context, event model.AccessEvent, now int
 	if !d.cfg.Detection.URI.Enabled {
 		uriKey = ""
 	}
-	decision, err := d.storage.RecordAndMaybeBlock(ctx, event, uaKey, uriKey, storage.DetectionOptions{Threshold: d.cfg.Detection.Threshold, WindowSeconds: d.cfg.Detection.WindowSeconds, BaseDuration: d.cfg.Penalty.BaseDurationSeconds, Multiplier: d.cfg.Penalty.Multiplier, MaxDuration: d.cfg.Penalty.MaxDurationSeconds, UseUA: d.cfg.Detection.UA.Enabled, UseURI: d.cfg.Detection.URI.Enabled, Now: now})
-	if err != nil {
-		return nil, err
-	}
+	return storage.Record{Event: event, UAKey: uaKey, URIKey: uriKey}, true
+}
+
+func (d *Detector) publish(event model.AccessEvent, decision *model.BlockDecision) {
 	if decision != nil {
 		if err := d.blockLog.Append(event, *decision); err != nil {
 			slog.Error("failed to append block audit log", "path", d.blockLog.Path, "error", err)
 		}
 		slog.Warn("abuse threshold reached", "domain", decision.Domain, "ip", decision.ClientIP, "count", decision.Count, "offense", decision.OffenseCount, "blocked_at", decision.BlockedAt, "blocked_until", decision.BlockedUntil)
 	}
-	return decision, nil
 }
 func (d *Detector) Prune(ctx context.Context, now int64) (int64, error) {
 	if now == 0 {

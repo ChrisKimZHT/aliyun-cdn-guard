@@ -35,3 +35,12 @@ docker run -d \
   -v "$PWD/data:/app/data" \
   chriskimzht/aliyun-cdn-guard:1
 ```
+
+## 性能测试
+
+使用以下指令进行性能测试，测试覆盖单 IP、多 IP 和每条请求不同 IP 三种场景，使用临时数据库，不修改生产数据、不调用阿里云 API。
+
+```bash
+./aliyun-cdn-guard --benchmark
+./aliyun-cdn-guard --benchmark --config config.yml --benchmark-dir ./data --benchmark-duration 60s # 使用指定配置，在目标磁盘上测试
+```

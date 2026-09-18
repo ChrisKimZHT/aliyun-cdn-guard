@@ -55,6 +55,12 @@ func New(cfg *config.Config, cred credentials.Credential, d *detector.Detector, 
 	sls.Logger = logger
 	option := consumer.LogHubConfig{Endpoint: cfg.SLS.Endpoint, CredentialsProvider: credentialAdapter{cred}, Project: cfg.SLS.Project, Logstore: cfg.SLS.Logstore, ConsumerGroupName: cfg.SLS.ConsumerGroup, ConsumerName: consumerName, CursorPosition: cursor, CursorStartTime: start, DataFetchIntervalInMs: int64(cfg.SLS.FetchIntervalSeconds) * 1000, Region: cfg.SLS.Region, Logger: logger}
 	process := func(_ int, groups *sls.LogGroupList, tracker consumer.CheckPointTracker) (string, error) {
+		events := make([]model.AccessEvent, 0, detector.BatchSize)
+		flush := func() error {
+			_, err := d.ProcessBatch(context.Background(), events, 0)
+			events = events[:0]
+			return err
+		}
 		for _, group := range groups.GetLogGroups() {
 			for _, item := range group.GetLogs() {
 				fields := map[string]string{}
@@ -67,10 +73,16 @@ func New(cfg *config.Config, cred credentials.Credential, d *detector.Detector, 
 				if !ok {
 					continue
 				}
-				if _, err := d.Process(context.Background(), event, 0); err != nil {
-					return "", err
+				events = append(events, event)
+				if len(events) == detector.BatchSize {
+					if err := flush(); err != nil {
+						return "", err
+					}
 				}
 			}
+		}
+		if err := flush(); err != nil {
+			return "", err
 		}
 		if err := tracker.SaveCheckPoint(false); err != nil {
 			return "", err
