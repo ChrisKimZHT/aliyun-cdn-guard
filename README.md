@@ -44,3 +44,11 @@ docker run -d \
 ./aliyun-cdn-guard --benchmark
 ./aliyun-cdn-guard --benchmark --config config.yml --benchmark-dir ./data --benchmark-duration 60s # 使用指定配置，在目标磁盘上测试
 ```
+
+参考结果：阿里云 `ecs.t6-c1m2.large` (2 vCPU 4 GiB)
+
+| 场景 | 日志处理 QPS | 平均批次耗时 | 最大批次耗时 |
+| --- | ---: | ---: | ---: |
+| 单 IP 持续攻击（hot） | 25,179 | 10.17 ms | 41.53 ms |
+| 1024 个 IP 轮询（distributed） | 2,088 | 122.63 ms | 323.63 ms |
+| 每条请求不同 IP（unique） | 23,260 | 11.01 ms | 46.04 ms |
